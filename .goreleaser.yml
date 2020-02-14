@@ -1,0 +1,34 @@
+before:
+  hooks:
+    - go mod download
+project_name: telegraf
+builds:
+- env:
+  - CGO_ENABLED=0
+  main: cmd/telegraf
+  binary: telegraf
+  goos:
+    - darwin
+    - linux
+    - windows
+archive:
+  replacements:
+    darwin: Darwin
+    linux: Linux
+    windows: Windows
+    386: i386
+    amd64: x86_64
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{.Tag}}-SNAPSHOT-{{.ShortCommit}}"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^build:'
+release:
+  github:
+    owner: racker
+    name: telegraf
