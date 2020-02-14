@@ -397,7 +397,7 @@ func MultiLineTCPServer(t *testing.T, wg *sync.WaitGroup) {
 	tcpServer, _ := net.ListenTCP("tcp", tcpAddr)
 	wg.Done()
 	conn, _ := tcpServer.AcceptTCP()
-	buf := make([]byte, 2048)
+	buf := make([]byte, 2048) // must be greater than connectionReadBufferSize
 	conn.Read(buf)
 	conn.Write([]byte("1 Header Response\r\n"))
 	conn.Write([]byte("2nd line with more data\r\n"))
