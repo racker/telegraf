@@ -189,10 +189,6 @@ func (smtp *Smtp) Gather(acc telegraf.Accumulator) error {
 	var returnTags map[string]string
 	// Gather data
 	returnTags, fields = smtp.SMTPGather()
-
-	for key, value := range returnTags {
-		tags[key] = value
-	}
 	// Merge the tags
 	for k, v := range returnTags {
 		tags[k] = v
