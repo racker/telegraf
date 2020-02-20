@@ -126,6 +126,11 @@ func TestSmtpFullSession_Success(t *testing.T) {
 	testSmtpHelper(t, 0, fields, tags)
 }
 
+func TestSmtp_FailTimeout(t *testing.T) {
+	fields, tags := getFieldsAndTags("timeout", 1, 0, 0)
+	testSmtpHelper(t, ConnectionTimeout, fields, tags)
+}
+
 func TestSmtp_FailEhlo(t *testing.T) {
 	fields, tags := getFieldsAndTags("read_failed", 3, 220, 0, 0)
 	testSmtpHelper(t, Ehlo, fields, tags)
@@ -155,11 +160,6 @@ func TestSmtp_FailPayload(t *testing.T) {
 func TestSmtp_FailQuit(t *testing.T) {
 	fields, tags := getFieldsAndTags("string_mismatch", 4, 220, 250, 250, 250, 354, 250, 999)
 	testSmtpHelper(t, Quit, fields, tags)
-}
-
-func TestSmtp_FailTimeout(t *testing.T) {
-	fields, tags := getFieldsAndTags("timeout", 1, 0, 0)
-	testSmtpHelper(t, ConnectionTimeout, fields, tags)
 }
 
 // codes must be provided in the same order as the codeTypes array
@@ -209,10 +209,10 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, resp serverConfig) {
 	tp := textproto.NewReader(reader)
 
 	if resp.connectionEndPhase == ConnectionTimeout {
-		wg.Done()
 		time.Sleep(getDefaultSmtpConfig().ReadTimeout.Duration + 1*time.Second)
 		conn.Close()
 		tcpServer.Close()
+		wg.Done()
 		return
 	}
 
