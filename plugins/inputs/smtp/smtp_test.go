@@ -216,7 +216,7 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, resp serverConfig) {
 		return
 	}
 
-	conn.Write([]byte("220 myhostname ESMTP Postfix (Ubuntu)\n"))
+	conn.Write([]byte("220 myhostname ESMTP Postfix (Ubuntu)\r\n"))
 
 	for {
 		data, err := tp.ReadLine()
@@ -228,41 +228,41 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, resp serverConfig) {
 			conn.Close()
 			break
 		} else if strings.HasPrefix(data, "EHLO") {
-			conn.Write([]byte("250-myhostname\n"))
-			conn.Write([]byte("250-PIPELINING\n"))
-			conn.Write([]byte("250-SIZE 10240000\n"))
-			conn.Write([]byte("250-VRFY\n"))
-			conn.Write([]byte("250-ETRN\n"))
-			conn.Write([]byte("250-STARTTLS\n"))
-			conn.Write([]byte("250-ENHANCEDSTATUSCODES\n"))
-			conn.Write([]byte("250-8BITMIME\n"))
-			conn.Write([]byte("250-DSN\n"))
-			conn.Write([]byte("250 SMTPUTF8\n"))
+			conn.Write([]byte("250-myhostname\r\n"))
+			conn.Write([]byte("250-PIPELINING\r\n"))
+			conn.Write([]byte("250-SIZE 10240000\r\n"))
+			conn.Write([]byte("250-VRFY\r\n"))
+			conn.Write([]byte("250-ETRN\r\n"))
+			conn.Write([]byte("250-STARTTLS\r\n"))
+			conn.Write([]byte("250-ENHANCEDSTATUSCODES\r\n"))
+			conn.Write([]byte("250-8BITMIME\r\n"))
+			conn.Write([]byte("250-DSN\r\n"))
+			conn.Write([]byte("250 SMTPUTF8\r\n"))
 		} else if resp.connectionEndPhase == From {
 			conn.Close()
 			break
 		} else if strings.HasPrefix(data, "MAIL FROM:") {
-			conn.Write([]byte("250 2.1.0 Ok\n"))
+			conn.Write([]byte("250 2.1.0 Ok\r\n"))
 		} else if resp.connectionEndPhase == To {
 			conn.Close()
 			break
 		} else if strings.HasPrefix(data, "RCPT TO:") {
-			conn.Write([]byte("250 2.1.5 Ok\n"))
+			conn.Write([]byte("250 2.1.5 Ok\r\n"))
 		} else if resp.connectionEndPhase == Data {
 			conn.Close()
 			break
 		} else if strings.HasPrefix(data, "DATA") {
-			conn.Write([]byte("354 End data with <CR><LF>.<CR><LF>\n"))
+			conn.Write([]byte("354 End data with <CR><LF>.<CR><LF>\r\n"))
 		} else if resp.connectionEndPhase == Payload {
 			conn.Close()
 			break
 		} else if strings.HasPrefix(data, "testdata") {
-			conn.Write([]byte("250 2.0.0 Ok: queued as C7CAA3F279\n"))
+			conn.Write([]byte("250 2.0.0 Ok: queued as C7CAA3F279\r\n"))
 		} else if resp.connectionEndPhase == Quit {
-			conn.Write([]byte("999 This is a fake error\n"))
+			conn.Write([]byte("999 This is a fake error\r\n"))
 			break
 		} else if strings.HasPrefix(data, "QUIT") {
-			conn.Write([]byte("221 2.0.0 Bye\n"))
+			conn.Write([]byte("221 2.0.0 Bye\r\n"))
 			break
 		}
 	}
