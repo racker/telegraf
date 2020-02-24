@@ -1,12 +1,18 @@
 package smtp
-
+/*
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
+	internaltls "github.com/influxdata/telegraf/internal/tls"
 	"net"
 	"net/textproto"
+	"strings"
 	"time"
 
+	"github.com/imdario/mergo"
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/plugins/inputs"
@@ -20,6 +26,7 @@ const (
 	ConnectionFailed
 	ReadFailed
 	StringMismatch
+	TlsError
 )
 
 // Smtp struct
@@ -31,7 +38,9 @@ type Smtp struct {
 	From        string
 	To          string
 	Body        string
-	Tls         bool
+	StartTls	bool
+
+	internaltls.ClientConfig
 }
 
 var description = "Automates an entire SMTP session and reports metrics"
@@ -51,10 +60,10 @@ var sampleConfig = `
   ## Set read timeout
   # read_timeout = "10s"
 
-  ## Optional value to provide to ehlo command 
+  ## Optional value to provide to ehlo command
   # ehlo = "example.com"
 
-  ## Optional value to provide to mailfrom command 
+  ## Optional value to provide to mailfrom command
   # from = "me@example.com"
 
   ## Optional value to provide to rcptto command
@@ -98,16 +107,42 @@ func WriteCmd(c net.Conn, m string) {
 	}
 }
 
+func upgradeToTls(config *Smtp, conn net.Conn, fields map[string]interface{}, tags map[string]string) error {
+	// get cert info and upgrade the connection to tls
+	tlsConfig, err := config.ClientConfig.TLSConfig()
+	if err != nil {
+		return err
+	}
+	if tlsConfig == nil {
+		return errors.New("empty tls config")
+	}
+
+	tlsClient := tls.Client(conn, tlsConfig)
+	tlserr := tlsClient.Handshake()
+	if tlserr != nil {
+		return tlserr
+	}
+	certs := tlsClient.ConnectionState().PeerCertificates
+	// upgrade initial connection to tls
+	conn = tlsClient
+
+	setCertMetrics(config.Address, certs, fields, tags)
+	return nil
+}
+
 // SMTPGather will execute the full smtp session.
 // It will return a map[string]interface{} for fields and a map[string]string for tags
 func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]interface{}) {
 	// Prepare returns
 	tags = make(map[string]string)
 	fields = make(map[string]interface{})
+
 	// Start Timer
 	start := time.Now()
 	// Connecting
 	conn, err := net.DialTimeout("tcp", config.Address, config.Timeout.Duration)
+	fmt.Println("connected")
+
 	// Prepare reader
 	reader := bufio.NewReader(conn)
 	tp := textproto.NewReader(reader)
@@ -129,10 +164,23 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	conn.SetDeadline(time.Now().Add(config.ReadTimeout.Duration))
 
 	// Commands are only executed if the previous one was successful
+	fmt.Println("Checking connect string")
 	success := CheckResponse(tp, "connect", 220, fields, tags)
 	if success && config.Ehlo != "" {
+		fmt.Println("Checking ehlo string")
 		WriteCmd(conn, "EHLO "+config.Ehlo)
 		success = CheckResponse(tp, "ehlo", 250, fields, tags)
+	}
+	if success && config.StartTls {
+		fmt.Println("Checking starttls string")
+		WriteCmd(conn, "STARTTLS")
+		success = CheckResponse(tp, "starttls", 220, fields, tags)
+		if success {
+			if err := upgradeToTls(config, conn, fields, tags); err != nil {
+				success = false
+				setResult(TlsError, fields, tags)
+			}
+		}
 	}
 	if success && config.From != "" {
 		WriteCmd(conn, "MAIL FROM:"+config.From)
@@ -203,6 +251,74 @@ func setProtocolMetrics(result ResultType, operation string, foundCode int, fiel
 	fields[operation+"_code"] = foundCode
 }
 
+func setCertMetrics(source string, certs []*x509.Certificate, fields map[string]interface{}, tags map[string]string) {
+	if len(certs) > 1 {
+		return
+	}
+	cFields := getCertFields(certs[0], time.Now())
+	cTags := getCertTags(certs[0], source)
+	mergo.Merge(&fields, cFields)
+	mergo.Merge(&tags, cTags)
+}
+
+// taken from x509_cert
+func getCertFields(cert *x509.Certificate, now time.Time) map[string]interface{} {
+	age := int(now.Sub(cert.NotBefore).Seconds())
+	expiry := int(cert.NotAfter.Sub(now).Seconds())
+	startdate := cert.NotBefore.Unix()
+	enddate := cert.NotAfter.Unix()
+
+	fields := map[string]interface{}{
+		"age":       age,
+		"expiry":    expiry,
+		"startdate": startdate,
+		"enddate":   enddate,
+	}
+
+	return fields
+}
+
+// taken from x509_cert
+func getCertTags(cert *x509.Certificate, location string) map[string]string {
+	tags := map[string]string{
+		"source":               location,
+		"common_name":          cert.Subject.CommonName,
+		"serial_number":        cert.SerialNumber.Text(16),
+		"signature_algorithm":  cert.SignatureAlgorithm.String(),
+		"public_key_algorithm": cert.PublicKeyAlgorithm.String(),
+	}
+
+	if len(cert.Subject.Organization) > 0 {
+		tags["organization"] = cert.Subject.Organization[0]
+	}
+	if len(cert.Subject.OrganizationalUnit) > 0 {
+		tags["organizational_unit"] = cert.Subject.OrganizationalUnit[0]
+	}
+	if len(cert.Subject.Country) > 0 {
+		tags["country"] = cert.Subject.Country[0]
+	}
+	if len(cert.Subject.Province) > 0 {
+		tags["province"] = cert.Subject.Province[0]
+	}
+	if len(cert.Subject.Locality) > 0 {
+		tags["locality"] = cert.Subject.Locality[0]
+	}
+
+	tags["issuer_common_name"] = cert.Issuer.CommonName
+	tags["issuer_serial_number"] = cert.Issuer.SerialNumber
+
+	san := append(cert.DNSNames, cert.EmailAddresses...)
+	for _, ip := range cert.IPAddresses {
+		san = append(san, ip.String())
+	}
+	for _, uri := range cert.URIs {
+		san = append(san, uri.String())
+	}
+	tags["san"] = strings.Join(san, ",")
+
+	return tags
+}
+
 func setResult(result ResultType, fields map[string]interface{}, tags map[string]string) {
 	var tag string
 	switch result {
@@ -227,3 +343,4 @@ func init() {
 		return &Smtp{}
 	})
 }
+*/
