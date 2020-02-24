@@ -33,6 +33,7 @@ type ConnectionEndPhase int
 
 const (
 	ConnectionTimeout ConnectionEndPhase = iota + 1
+	LateTimeout
 	Ehlo
 	From
 	To
@@ -42,7 +43,7 @@ const (
 )
 
 func TestSample(t *testing.T) {
-	c := &Smtp{}
+	c := &SmtpConfig{}
 	output := c.SampleConfig()
 	if output != sampleConfig {
 		t.Error("Sample config doesn't match")
@@ -50,7 +51,7 @@ func TestSample(t *testing.T) {
 }
 
 func TestDescription(t *testing.T) {
-	c := &Smtp{}
+	c := &SmtpConfig{}
 	output := c.Description()
 	if output != description {
 		t.Error("Description output is not correct")
@@ -59,7 +60,7 @@ func TestDescription(t *testing.T) {
 
 func TestNoPort(t *testing.T) {
 	var acc testutil.Accumulator
-	c := Smtp{
+	c := SmtpConfig{
 		Address: ":",
 	}
 	err1 := c.Gather(&acc)
@@ -69,7 +70,7 @@ func TestNoPort(t *testing.T) {
 
 func TestAddressOnly(t *testing.T) {
 	var acc testutil.Accumulator
-	c := Smtp{
+	c := SmtpConfig{
 		Address: "127.0.0.1",
 	}
 	err1 := c.Gather(&acc)
@@ -146,11 +147,17 @@ func TestSmtpTlsSession_Success(t *testing.T) {
 	testSmtpHelper(t, testConfig, fields, tags)
 }
 
-//func TestSmtp_FailTimeout(t *testing.T) {
-//	fields, tags := getFieldsAndTags("timeout", 1, false)
-//	testConfig := testConfig{connectionEndPhase: ConnectionTimeout}
-//	testSmtpHelper(t, testConfig, fields, tags)
-//}
+func TestSmtp_FailTimeoutConnection(t *testing.T) {
+	fields, tags := getFieldsAndTags("timeout", 1, false)
+	testConfig := testConfig{connectionEndPhase: ConnectionTimeout}
+	testSmtpHelper(t, testConfig, fields, tags)
+}
+
+func TestSmtp_FailTimeoutAfterRcptTo(t *testing.T) {
+	fields, tags := getFieldsAndTags("timeout", 1, false, 220, 250, 250, 250)
+	testConfig := testConfig{connectionEndPhase: LateTimeout}
+	testSmtpHelper(t, testConfig, fields, tags)
+}
 
 func TestSmtp_FailEhlo(t *testing.T) {
 	fields, tags := getFieldsAndTags("ehlo_failed", 4, false, 220, 421)
@@ -242,10 +249,11 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 	tp := textproto.NewReader(reader)
 
 	if config.connectionEndPhase == ConnectionTimeout {
-		time.Sleep(getDefaultSmtpConfig().ReadTimeout.Duration + 5*time.Second)
+		time.Sleep(getDefaultSmtpConfig().Timeout.Duration + time.Second)
 		wg.Done()
 		return
 	}
+
 	// send initial connection response
 	conn.Write([]byte("220 myhostname ESMTP Postfix (Ubuntu)\r\n"))
 
@@ -289,6 +297,10 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 			conn.Write([]byte("424 This is a fake error\r\n"))
 		} else if strings.HasPrefix(data, "RCPT TO:") {
 			conn.Write([]byte("250 2.1.5 Ok\r\n"))
+		} else if config.connectionEndPhase == LateTimeout {
+			time.Sleep(getDefaultSmtpConfig().Timeout.Duration + 1*time.Second)
+			wg.Done()
+			return
 		} else if config.connectionEndPhase == Data {
 			conn.Write([]byte("425 This is a fake error\r\n"))
 		} else if strings.HasPrefix(data, "DATA") {
@@ -306,11 +318,10 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 	wg.Done()
 }
 
-func getDefaultSmtpConfig() Smtp {
-	return Smtp{
+func getDefaultSmtpConfig() SmtpConfig {
+	return SmtpConfig{
 		Address:     "127.0.0.1:2004",
 		Timeout:     internal.Duration{Duration: time.Second},
-		ReadTimeout: internal.Duration{Duration: time.Second * 3},
 		Ehlo:        "me@test.com",
 		From:        "me2@test.com",
 		To:          "me3@test.com",
@@ -319,7 +330,7 @@ func getDefaultSmtpConfig() Smtp {
 	}
 }
 
-func getTlsSmtpConfig(insecure bool) Smtp {
+func getTlsSmtpConfig(insecure bool) SmtpConfig {
 	conf := getDefaultSmtpConfig()
 	conf.StartTls = true
 	conf.ClientConfig = *getTlsClientConfig(insecure)
