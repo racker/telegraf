@@ -15,6 +15,7 @@ import (
 )
 
 type ResultType uint64
+type Operation string
 
 const (
 	Success ResultType = iota
@@ -22,6 +23,17 @@ const (
 	ConnectionFailed
 	ReadFailed
 	StringMismatch
+)
+
+const (
+	Connect Operation = "connect"
+	Ehlo = "ehlo"
+	StartTls = "starttls"
+	MailFrom = "from"
+	RcptTo = "to"
+	Data = "data"
+	Body = "body"
+	Quit = "quit"
 )
 
 // Smtp struct
@@ -76,7 +88,7 @@ func (*Smtp) SampleConfig() string {
 	return sampleConfig
 }
 
-func CheckResponse(r *textproto.Reader, operation string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
+func CheckResponse(r *textproto.Reader, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
 	var err error
 	code, _, err := r.ReadResponse(expectedCode)
 	if err != nil {
@@ -97,9 +109,6 @@ func CheckResponse(r *textproto.Reader, operation string, expectedCode int, fiel
 // the data command expects an additional input to signal its end
 func WriteCmd(c net.Conn, m string) {
 	c.Write([]byte(m + "\r\n"))
-	if m == "DATA" {
-		c.Write([]byte(".\r\n"))
-	}
 }
 
 // SMTPGather will execute the full smtp session.
@@ -118,7 +127,7 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	// Stop timer
 	responseTime := time.Since(start).Seconds()
 	fields["connect_time"] = responseTime
-	// Handle error
+	// Handle connection error
 	if err != nil {
 		if e, ok := err.(net.Error); ok && e.Timeout() {
 			setResult(Timeout, fields, tags)
@@ -133,14 +142,16 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	conn.SetDeadline(time.Now().Add(config.ReadTimeout.Duration))
 
 	// Commands are only executed if the previous one was successful
-	success := CheckResponse(tp, "connect", 220, fields, tags)
+
+	// verify client connected
+	success := CheckResponse(tp, Connect, 220, fields, tags)
+
+	// perform required commands
 	if success && config.Ehlo != "" {
-		WriteCmd(conn, "EHLO "+config.Ehlo)
-		success = CheckResponse(tp, "ehlo", 250, fields, tags)
+		success = performCommand(conn, tp, Ehlo, "EHLO "+config.Ehlo, 250, fields, tags)
 	}
 	if success && config.StartTls {
-		WriteCmd(conn, "STARTTLS")
-		success = CheckResponse(tp, "starttls", 220, fields, tags)
+		success = performCommand(conn, tp, StartTls, "STARTTLS", 220, fields, tags)
 		if success {
 			// read tls config
 			tlsConfig, err := config.ClientConfig.TLSConfig()
@@ -157,32 +168,41 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 		}
 	}
 	if success && config.From != "" {
-		WriteCmd(conn, "MAIL FROM:"+config.From)
-		success = CheckResponse(tp, "from", 250, fields, tags)
+		success = performCommand(conn, tp, MailFrom, "MAIL FROM:"+config.From, 250, fields, tags)
 	}
+
 	if success && config.To != "" {
-		WriteCmd(conn, "RCPT TO:"+config.To)
-		success = CheckResponse(tp, "to", 250, fields, tags)
+		success = performCommand(conn, tp, RcptTo, "RCPT TO:"+config.To, 250, fields, tags)
 	}
 	if success && config.Body != "" {
-		WriteCmd(conn, "DATA\r\n"+config.Body)
 		// First check the response from "DATA"
-		success = CheckResponse(tp, "data", 354, fields, tags)
+		success = performCommand(conn, tp, Data, "DATA", 354, fields, tags)
 		if success {
 			// then the response from the body
-			success = CheckResponse(tp, "body", 250, fields, tags)
+			success = performCommand(conn, tp, Body, config.Body+"\r\n.\r\n", 250, fields, tags)
 		}
 	}
 
-	// Send a quit whether the previous commands succeeded or not
-	WriteCmd(conn, "QUIT")
-	success = CheckResponse(tp, "quit", 221, fields, tags)
+	// always execute the quit command
+	if success {
+		performCommand(conn, tp, Quit, "QUIT", 221, fields, tags)
+	}
 
 	responseTime = time.Since(start).Seconds()
-
 	fields["total_time"] = responseTime
 	return tags, fields
 }
+
+func performCommand(conn net.Conn, tp *textproto.Reader, operation Operation, msg string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
+	WriteCmd(conn, msg)
+	success = CheckResponse(tp, operation, expectedCode, fields, tags)
+	if !success && operation != Quit {
+		// if the request failed still try to quit cleanly
+		WriteCmd(conn, "QUIT")
+	}
+	return success
+}
+
 
 // Gather is called by telegraf when the plugin is executed on its interval.
 // It will call SMTPGather to generate metrics and also fill an Accumulator that is supplied.
@@ -220,9 +240,11 @@ func (smtp *Smtp) Gather(acc telegraf.Accumulator) error {
 	return nil
 }
 
-func setProtocolMetrics(result ResultType, operation string, foundCode int, fields map[string]interface{}, tags map[string]string) {
+func setProtocolMetrics(result ResultType, operation Operation, foundCode int, fields map[string]interface{}, tags map[string]string) {
 	setResult(result, fields, tags)
-	fields[operation+"_code"] = foundCode
+	if foundCode != 0 {
+		fields[string(operation)+"_code"] = foundCode
+	}
 }
 
 func setResult(result ResultType, fields map[string]interface{}, tags map[string]string) {
@@ -240,8 +262,8 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 		tag = "string_mismatch"
 	}
 
-	tags["result"] = tag
 	fields["result_code"] = uint64(result)
+	tags["result"] = tag
 }
 
 func init() {
