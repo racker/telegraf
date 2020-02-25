@@ -30,14 +30,14 @@ const (
 )
 
 const (
-	Connect Operation = "connect"
-	Ehlo = "ehlo"
-	StartTls = "starttls"
-	MailFrom = "from"
-	RcptTo = "to"
-	Data = "data"
-	Body = "body"
-	Quit = "quit"
+	Connect  Operation = "connect"
+	Ehlo               = "ehlo"
+	StartTls           = "starttls"
+	MailFrom           = "from"
+	RcptTo             = "to"
+	Data               = "data"
+	Body               = "body"
+	Quit               = "quit"
 )
 
 // Smtp struct
@@ -49,7 +49,7 @@ type Smtp struct {
 	From        string
 	To          string
 	Body        string
-	StartTls         bool
+	StartTls    bool
 
 	internaltls.ClientConfig
 }
@@ -133,7 +133,6 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 		return tags, fields
 	}
 
-
 	// Perform required commands
 	// Commands are only executed if the previous one was successful
 	if success && config.Ehlo != "" {
@@ -142,7 +141,7 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	if success && config.StartTls {
 		// read tls config
 		tlsConfig, err := config.ClientConfig.TLSConfig()
-		if err != nil || tlsConfig == nil{
+		if err != nil || tlsConfig == nil {
 			// cleanly close the connection
 			text.Cmd("QUIT")
 			// update failure status

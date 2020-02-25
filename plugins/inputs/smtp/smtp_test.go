@@ -27,8 +27,8 @@ type testConfig struct {
 	// defines the step at which the connection should close
 	// the connection will close directly before the given step is executed
 	connectionEndPhase ConnectionEndPhase
-	tls bool
-	tlsInsecure bool
+	tls                bool
+	tlsInsecure        bool
 }
 
 type ConnectionEndPhase int
@@ -96,7 +96,7 @@ func TestConnectionError(t *testing.T) {
 		map[string]interface{}{
 			"result_code":  uint64(2),
 			"connect_time": 1.0,
-			"total_time": 2.0,
+			"total_time":   2.0,
 		},
 		map[string]string{
 			"result": "connection_failed",
@@ -349,12 +349,12 @@ func getDefaultSmtpConfig() Smtp {
 	return Smtp{
 		Address:     "127.0.0.1:2004",
 		Timeout:     internal.Duration{Duration: time.Second},
-		ReadTimeout:     internal.Duration{Duration: time.Second * 2},
+		ReadTimeout: internal.Duration{Duration: time.Second * 2},
 		Ehlo:        "me@test.com",
 		From:        "me2@test.com",
 		To:          "me3@test.com",
 		Body:        "testdata 12345",
-		StartTls:	false,
+		StartTls:    false,
 	}
 }
 
