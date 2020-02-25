@@ -266,7 +266,16 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 		}
 		require.NoError(t, err)
 
-		if config.connectionEndPhase == FailEhlo {
+		// quit must be handled before other cases since most failures will trigger a quit command
+		// i.e. if FailEhlo is executed we still need to handle receiving a quit
+		// the other responses are ordered based on the order of execution in the plugin
+		if strings.HasPrefix(data, "QUIT") {
+			if config.connectionEndPhase == FailQuit {
+				conn.Write([]byte("426 This is a fake error\r\n"))
+			} else {
+				conn.Write([]byte("221 2.0.0 Bye\r\n"))
+			}
+		} else if config.connectionEndPhase == FailEhlo {
 			conn.Write([]byte("421 This is a fake error\r\n"))
 		} else if strings.HasPrefix(data, "EHLO") {
 			conn.Write([]byte("250-myhostname\r\n"))
@@ -310,10 +319,6 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 			conn.Write([]byte("425 This is a fake error\r\n"))
 		} else if strings.HasPrefix(data, "testdata") {
 			conn.Write([]byte("250 2.0.0 Ok: queued as C7CAA3F279\r\n"))
-		} else if config.connectionEndPhase == FailQuit {
-			conn.Write([]byte("426 This is a fake error\r\n"))
-		} else if strings.HasPrefix(data, "QUIT") {
-			conn.Write([]byte("221 2.0.0 Bye\r\n"))
 		}
 	}
 	wg.Done()
