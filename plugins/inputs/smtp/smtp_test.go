@@ -147,6 +147,16 @@ func TestSmtpTlsSession_Success(t *testing.T) {
 	testSmtpHelper(t, testConfig, fields, tags)
 }
 
+func TestSmtpSecureTlsSession_Success(t *testing.T) {
+	fields, tags := getFieldsAndTags("success", 0, true, 220, 250, 220, 250, 250, 354, 250, 221)
+	testConfig := testConfig{
+		connectionEndPhase: 0,
+		tls:                true,
+		tlsInsecure:        false,
+	}
+	testSmtpHelper(t, testConfig, fields, tags)
+}
+
 func TestSmtp_FailTimeoutConnection(t *testing.T) {
 	fields, tags := getFieldsAndTags("timeout", 1, false)
 	testConfig := testConfig{connectionEndPhase: ConnectionTimeout}

@@ -26,6 +26,7 @@ const (
 	ConnectionFailed
 	ReadFailed
 	StringMismatch
+	TlsConfigError
 )
 
 const (
@@ -162,15 +163,18 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 			// read tls config
 			tlsConfig, err := config.ClientConfig.TLSConfig()
 			if err != nil || tlsConfig == nil{
-				//setResult(TlsConfigError, fields, tags)
-				//earlyEndSmtpSession(timeoutChan, client)
-				return
+				// cleanly close the connection
+				WriteCmd(conn, "QUIT")
+				// update failure status
+				setResult(TlsConfigError, fields, tags)
+				success = false
+			} else {
+				// upgrade connection to tls
+				conn = tls.Client(conn, tlsConfig)
+				// update reader to use new connection
+				reader = bufio.NewReader(conn)
+				tp = textproto.NewReader(reader)
 			}
-			// upgrade connection to tls
-			conn = tls.Client(conn, tlsConfig)
-			// update reader to use new connection
-			reader = bufio.NewReader(conn)
-			tp = textproto.NewReader(reader)
 		}
 	}
 	if success && config.From != "" {
@@ -267,6 +271,8 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 		tag = "read_failed"
 	case StringMismatch:
 		tag = "string_mismatch"
+	case TlsConfigError:
+		tag = "tls_config_error"
 	}
 
 	fields["result_code"] = uint64(result)
