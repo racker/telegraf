@@ -147,8 +147,8 @@ func TestSmtpTlsSession_Success(t *testing.T) {
 	testSmtpHelper(t, testConfig, fields, tags)
 }
 
-func TestSmtpSecureTlsSession_Success(t *testing.T) {
-	fields, tags := getFieldsAndTags("success", 0, true, 220, 250, 220, 250, 250, 354, 250, 221)
+func TestSmtpSecureTlsSession_Fail(t *testing.T) {
+	fields, tags := getFieldsAndTags("tls_config_error", 5, true, 220, 250)
 	testConfig := testConfig{
 		connectionEndPhase: 0,
 		tls:                true,
@@ -318,7 +318,7 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 		} else if strings.HasPrefix(data, "RCPT TO:") {
 			conn.Write([]byte("250 2.1.5 Ok\r\n"))
 		} else if config.connectionEndPhase == LateTimeout {
-			time.Sleep(getDefaultSmtpConfig().ReadTimeout.Duration + 1*time.Second)
+			time.Sleep(getDefaultSmtpConfig().ReadTimeout.Duration + time.Second)
 			wg.Done()
 			return
 		} else if config.connectionEndPhase == FailData {

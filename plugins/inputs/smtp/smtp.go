@@ -1,7 +1,6 @@
 package smtp
 
 import (
-	"bufio"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -83,8 +82,15 @@ var sampleConfig = `
   ## Optional value to provide to data command
   # body = "this is a test payload"
 
-  ## Optional tls config
-  # tls = false
+  ## Optional whether to issue "starttls" command
+  # starttls = false
+
+  ## Optional TLS Config
+  # tls_ca = "/etc/telegraf/ca.pem"
+  # tls_cert = "/etc/telegraf/cert.pem"
+  # tls_key = "/etc/telegraf/key.pem"
+  ## Use TLS but skip chain & host verification
+  # insecure_skip_verify = true
 `
 
 // SampleConfig will return a complete configuration example with details about each field.
@@ -92,7 +98,7 @@ func (*Smtp) SampleConfig() string {
 	return sampleConfig
 }
 
-func CheckResponse(r *textproto.Reader, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
+func CheckResponse(r *textproto.Conn, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
 	var err error
 	code, msg, err := r.ReadResponse(expectedCode)
 	logMsg(fmt.Sprintf("Received response from %s operation: %d %s", string(operation), code, msg))
@@ -111,12 +117,6 @@ func CheckResponse(r *textproto.Reader, operation Operation, expectedCode int, f
 	return true
 }
 
-// sends the smtp commands to the server
-// the data command expects an additional input to signal its end
-func WriteCmd(c net.Conn, m string) {
-	c.Write([]byte(m + "\r\n"))
-}
-
 // SMTPGather will execute the full smtp session.
 // It will return a map[string]interface{} for fields and a map[string]string for tags
 func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]interface{}) {
@@ -128,19 +128,24 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	// Connecting
 	logMsg("Dialing tcp connection")
 	conn, err := net.DialTimeout("tcp", config.Address, config.Timeout.Duration)
-	// Prepare reader
-	reader := bufio.NewReader(conn)
-	tp := textproto.NewReader(reader)
-	// Stop timer
-	responseTime := time.Since(start).Seconds()
-	fields["connect_time"] = responseTime
-	// Handle connection error
 	if err != nil {
 		if e, ok := err.(net.Error); ok && e.Timeout() {
 			setResult(Timeout, fields, tags)
 		} else {
 			setResult(ConnectionFailed, fields, tags)
 		}
+		return tags, fields
+	}
+	conn.SetReadDeadline(time.Now().Add(config.ReadTimeout.Duration))
+	// Prepare reader
+	text := textproto.NewConn(conn)
+	// Verify client connected
+	success := CheckResponse(text, Connect, 220, fields, tags)
+	// Stop timer
+	responseTime := time.Since(start).Seconds()
+	fields["connect_time"] = responseTime
+	// Handle connection error
+	if !success {
 		return tags, fields
 	}
 	defer conn.Close()
@@ -150,52 +155,47 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 
 	// Commands are only executed if the previous one was successful
 
-	// verify client connected
-	success := CheckResponse(tp, Connect, 220, fields, tags)
-
 	// perform required commands
 	if success && config.Ehlo != "" {
-		success = performCommand(conn, tp, Ehlo, "EHLO "+config.Ehlo, 250, fields, tags)
+		success = performCommand(text, Ehlo, "EHLO "+config.Ehlo, 250, fields, tags)
 	}
 	if success && config.StartTls {
-		success = performCommand(conn, tp, StartTls, "STARTTLS", 220, fields, tags)
-		if success {
-			// read tls config
-			tlsConfig, err := config.ClientConfig.TLSConfig()
-			if err != nil || tlsConfig == nil{
-				// cleanly close the connection
-				WriteCmd(conn, "QUIT")
-				// update failure status
-				setResult(TlsConfigError, fields, tags)
-				success = false
-			} else {
+		// read tls config
+		tlsConfig, err := config.ClientConfig.TLSConfig()
+		if err != nil || tlsConfig == nil{
+			// cleanly close the connection
+			text.Cmd("QUIT")
+			// update failure status
+			setResult(TlsConfigError, fields, tags)
+			success = false
+		} else {
+			success = performCommand(text, StartTls, "STARTTLS", 220, fields, tags)
+			if success {
 				// upgrade connection to tls
 				conn = tls.Client(conn, tlsConfig)
-				// update reader to use new connection
-				reader = bufio.NewReader(conn)
-				tp = textproto.NewReader(reader)
+				text = textproto.NewConn(conn)
 			}
 		}
 	}
 	if success && config.From != "" {
-		success = performCommand(conn, tp, MailFrom, "MAIL FROM:"+config.From, 250, fields, tags)
+		success = performCommand(text, MailFrom, "MAIL FROM:"+config.From, 250, fields, tags)
 	}
 
 	if success && config.To != "" {
-		success = performCommand(conn, tp, RcptTo, "RCPT TO:"+config.To, 250, fields, tags)
+		success = performCommand(text, RcptTo, "RCPT TO:"+config.To, 250, fields, tags)
 	}
 	if success && config.Body != "" {
 		// First check the response from "DATA"
-		success = performCommand(conn, tp, Data, "DATA", 354, fields, tags)
+		success = performCommand(text, Data, "DATA", 354, fields, tags)
 		if success {
 			// then the response from the body
-			success = performCommand(conn, tp, Body, config.Body+"\r\n.\r\n", 250, fields, tags)
+			success = performCommand(text, Body, config.Body+"\r\n.\r\n", 250, fields, tags)
 		}
 	}
 
 	// always execute the quit command
 	if success {
-		performCommand(conn, tp, Quit, "QUIT", 221, fields, tags)
+		performCommand(text, Quit, "QUIT", 221, fields, tags)
 	}
 
 	responseTime = time.Since(start).Seconds()
@@ -203,15 +203,30 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	return tags, fields
 }
 
-func performCommand(conn net.Conn, tp *textproto.Reader, operation Operation, msg string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
+func performCommand(text *textproto.Conn, operation Operation, msg string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
 	logMsg(fmt.Sprintf("Executing %s command", string(operation)))
-	WriteCmd(conn, msg)
-	success = CheckResponse(tp, operation, expectedCode, fields, tags)
-	if !success && operation != Quit {
-		// if the request failed still try to quit cleanly
-		WriteCmd(conn, "QUIT")
+	id, err := text.Cmd(msg)
+	if err != nil {
+		// do something
 	}
-	return success
+	text.StartResponse(id)
+	defer text.EndResponse(id)
+	code, msg, err := text.ReadResponse(expectedCode)
+
+	logMsg(fmt.Sprintf("Received response from %s operation: %d %s", string(operation), code, msg))
+
+	if err != nil {
+		if e, ok := err.(net.Error); ok && e.Timeout() {
+			setProtocolMetrics(Timeout, operation, code, fields, tags)
+		} else if e, ok := err.(*textproto.Error); ok && e.Code != 0 {
+			setProtocolMetrics(StringMismatch, operation, code, fields, tags)
+		} else {
+			setProtocolMetrics(ReadFailed, operation, code, fields, tags)
+		}
+		return false
+	}
+	setProtocolMetrics(Success, operation, code, fields, tags)
+	return true
 }
 
 
