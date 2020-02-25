@@ -349,7 +349,7 @@ func getDefaultSmtpConfig() Smtp {
 	return Smtp{
 		Address:     "127.0.0.1:2004",
 		Timeout:     internal.Duration{Duration: time.Second},
-		ReadTimeout:     internal.Duration{Duration: time.Second * 3},
+		ReadTimeout:     internal.Duration{Duration: time.Second * 2},
 		Ehlo:        "me@test.com",
 		From:        "me2@test.com",
 		To:          "me3@test.com",
