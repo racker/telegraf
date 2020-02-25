@@ -289,8 +289,8 @@ func (smtpConfig *SmtpConfig) Gather(acc telegraf.Accumulator) error {
 	tags := map[string]string{"server": host, "port": port}
 
 	var client *smtp.Client
-	ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(smtpConfig.Timeout.Duration))
-	//defer cancel()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(smtpConfig.Timeout.Duration))
+	defer cancel()
 	// Gather data
 	ch := make(chan bool, 1)
 	start := time.Now()
@@ -305,6 +305,7 @@ func (smtpConfig *SmtpConfig) Gather(acc telegraf.Accumulator) error {
 		setTotalTime(start, &fields)
 		break
 	}
+	//close(ch) // commenting this makes things work, but with it in place the failures show `SMTPGather` continues running after the ctx ends
 
 	// Merge the tags
 	for k, v := range tags {
