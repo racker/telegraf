@@ -26,6 +26,7 @@ const (
 	ReadFailed
 	StringMismatch
 	TlsConfigError
+	CommandFailed
 )
 
 const (
@@ -98,25 +99,6 @@ func (*Smtp) SampleConfig() string {
 	return sampleConfig
 }
 
-func CheckResponse(r *textproto.Conn, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
-	var err error
-	code, msg, err := r.ReadResponse(expectedCode)
-	logMsg(fmt.Sprintf("Received response from %s operation: %d %s", string(operation), code, msg))
-
-	if err != nil {
-		if e, ok := err.(net.Error); ok && e.Timeout() {
-			setProtocolMetrics(Timeout, operation, code, fields, tags)
-		} else if e, ok := err.(*textproto.Error); ok && e.Code != 0 {
-			setProtocolMetrics(StringMismatch, operation, code, fields, tags)
-		} else {
-			setProtocolMetrics(ReadFailed, operation, code, fields, tags)
-		}
-		return false
-	}
-	setProtocolMetrics(Success, operation, code, fields, tags)
-	return true
-}
-
 // SMTPGather will execute the full smtp session.
 // It will return a map[string]interface{} for fields and a map[string]string for tags
 func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]interface{}) {
@@ -136,11 +118,13 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 		}
 		return tags, fields
 	}
+	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(config.ReadTimeout.Duration))
 	// Prepare reader
 	text := textproto.NewConn(conn)
+	defer text.Close()
 	// Verify client connected
-	success := CheckResponse(text, Connect, 220, fields, tags)
+	success := checkResponse(text, Connect, 220, fields, tags)
 	// Stop timer
 	responseTime := time.Since(start).Seconds()
 	fields["connect_time"] = responseTime
@@ -148,14 +132,10 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	if !success {
 		return tags, fields
 	}
-	defer conn.Close()
 
-	// Set the overall read timeout
-	conn.SetDeadline(time.Now().Add(config.ReadTimeout.Duration))
 
+	// Perform required commands
 	// Commands are only executed if the previous one was successful
-
-	// perform required commands
 	if success && config.Ehlo != "" {
 		success = performCommand(text, Ehlo, "EHLO "+config.Ehlo, 250, fields, tags)
 	}
@@ -207,66 +187,36 @@ func performCommand(text *textproto.Conn, operation Operation, msg string, expec
 	logMsg(fmt.Sprintf("Executing %s command", string(operation)))
 	id, err := text.Cmd(msg)
 	if err != nil {
-		// do something
+		setResult(CommandFailed, fields, tags)
+		return false
 	}
+	// this is needed so the response to starttls can be read
 	text.StartResponse(id)
 	defer text.EndResponse(id)
-	code, msg, err := text.ReadResponse(expectedCode)
 
+	return checkResponse(text, operation, expectedCode, fields, tags)
+}
+
+func checkResponse(text *textproto.Conn, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
+	var err error
+	code, msg, err := text.ReadResponse(expectedCode)
 	logMsg(fmt.Sprintf("Received response from %s operation: %d %s", string(operation), code, msg))
 
 	if err != nil {
 		if e, ok := err.(net.Error); ok && e.Timeout() {
-			setProtocolMetrics(Timeout, operation, code, fields, tags)
+			setMetrics(Timeout, operation, code, fields, tags)
 		} else if e, ok := err.(*textproto.Error); ok && e.Code != 0 {
-			setProtocolMetrics(StringMismatch, operation, code, fields, tags)
+			setMetrics(StringMismatch, operation, code, fields, tags)
 		} else {
-			setProtocolMetrics(ReadFailed, operation, code, fields, tags)
+			setMetrics(ReadFailed, operation, code, fields, tags)
 		}
 		return false
 	}
-	setProtocolMetrics(Success, operation, code, fields, tags)
+	setMetrics(Success, operation, code, fields, tags)
 	return true
 }
 
-
-// Gather is called by telegraf when the plugin is executed on its interval.
-// It will call SMTPGather to generate metrics and also fill an Accumulator that is supplied.
-func (smtp *Smtp) Gather(acc telegraf.Accumulator) error {
-	// Set default values
-	if smtp.Timeout.Duration == 0 {
-		smtp.Timeout.Duration = time.Second
-	}
-	if smtp.ReadTimeout.Duration == 0 {
-		smtp.ReadTimeout.Duration = time.Second * 10
-	}
-	// Prepare host and port
-	host, port, err := net.SplitHostPort(smtp.Address)
-	if err != nil {
-		return err
-	}
-	if host == "" {
-		smtp.Address = "localhost:" + port
-	}
-	if port == "" {
-		return errors.New("Bad port")
-	}
-	// Prepare data
-	tags := map[string]string{"server": host, "port": port}
-	var fields map[string]interface{}
-	var returnTags map[string]string
-	// Gather data
-	returnTags, fields = smtp.SMTPGather()
-	// Merge the tags
-	for k, v := range returnTags {
-		tags[k] = v
-	}
-	// Add metrics
-	acc.AddFields("smtp", fields, tags)
-	return nil
-}
-
-func setProtocolMetrics(result ResultType, operation Operation, foundCode int, fields map[string]interface{}, tags map[string]string) {
+func setMetrics(result ResultType, operation Operation, foundCode int, fields map[string]interface{}, tags map[string]string) {
 	setResult(result, fields, tags)
 	if foundCode != 0 {
 		fields[string(operation)+"_code"] = foundCode
@@ -298,6 +248,43 @@ func logMsg(msg string) {
 	if wlog.LogLevel() == wlog.DEBUG {
 		log.Println(msg)
 	}
+}
+
+// Gather is called by telegraf when the plugin is executed on its interval.
+// It will call SMTPGather to generate metrics and also fill an Accumulator that is supplied.
+func (smtp *Smtp) Gather(acc telegraf.Accumulator) error {
+	wlog.SetLevelFromName("DEBUG")
+	// Set default values
+	if smtp.Timeout.Duration == 0 {
+		smtp.Timeout.Duration = time.Second
+	}
+	if smtp.ReadTimeout.Duration == 0 {
+		smtp.ReadTimeout.Duration = time.Second * 10
+	}
+	// Prepare host and port
+	host, port, err := net.SplitHostPort(smtp.Address)
+	if err != nil {
+		return err
+	}
+	if host == "" {
+		smtp.Address = "localhost:" + port
+	}
+	if port == "" {
+		return errors.New("Bad port")
+	}
+	// Prepare data
+	tags := map[string]string{"server": host, "port": port}
+	var fields map[string]interface{}
+	var returnTags map[string]string
+	// Gather data
+	returnTags, fields = smtp.SMTPGather()
+	// Merge the tags
+	for k, v := range returnTags {
+		tags[k] = v
+	}
+	// Add metrics
+	acc.AddFields("smtp", fields, tags)
+	return nil
 }
 
 func init() {
