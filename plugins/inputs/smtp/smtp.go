@@ -253,7 +253,6 @@ func logMsg(msg string) {
 // Gather is called by telegraf when the plugin is executed on its interval.
 // It will call SMTPGather to generate metrics and also fill an Accumulator that is supplied.
 func (smtp *Smtp) Gather(acc telegraf.Accumulator) error {
-	wlog.SetLevelFromName("DEBUG")
 	// Set default values
 	if smtp.Timeout.Duration == 0 {
 		smtp.Timeout.Duration = time.Second

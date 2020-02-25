@@ -7,8 +7,10 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -270,11 +272,20 @@ func SmtpServer(t *testing.T, wg *sync.WaitGroup, config testConfig) {
 
 	for {
 		data, err := tp.ReadLine()
-		if err == io.EOF {
-			// if the client disconnected, exit to close the server connection
-			break
+		if err != nil {
+			if err == io.EOF {
+				// if the client disconnected, exit to close the server connection
+				break
+			}
+			if opErr, ok := err.(*net.OpError); ok {
+				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
+					if syscallErr.Err == syscall.ECONNRESET {
+						break
+					}
+				}
+			}
 		}
-		require.NoError(t, err)
+		assert.NoError(t, err, "Unhandled error occurred")
 
 		// quit must be handled before other cases since most failures will trigger a quit command
 		// i.e. if FailEhlo is executed we still need to handle receiving a quit
