@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/textproto"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal"
+	internaltls "github.com/influxdata/telegraf/internal/tls"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
@@ -31,7 +33,9 @@ type Smtp struct {
 	From        string
 	To          string
 	Body        string
-	Tls         bool
+	StartTls         bool
+
+	internaltls.ClientConfig
 }
 
 var description = "Automates an entire SMTP session and reports metrics"
@@ -133,6 +137,24 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	if success && config.Ehlo != "" {
 		WriteCmd(conn, "EHLO "+config.Ehlo)
 		success = CheckResponse(tp, "ehlo", 250, fields, tags)
+	}
+	if success && config.StartTls {
+		WriteCmd(conn, "STARTTLS")
+		success = CheckResponse(tp, "starttls", 220, fields, tags)
+		if success {
+			// read tls config
+			tlsConfig, err := config.ClientConfig.TLSConfig()
+			if err != nil || tlsConfig == nil{
+				//setResult(TlsConfigError, fields, tags)
+				//earlyEndSmtpSession(timeoutChan, client)
+				return
+			}
+			// upgrade connection to tls
+			conn = tls.Client(conn, tlsConfig)
+			// update reader to use new connection
+			reader = bufio.NewReader(conn)
+			tp = textproto.NewReader(reader)
+		}
 	}
 	if success && config.From != "" {
 		WriteCmd(conn, "MAIL FROM:"+config.From)
