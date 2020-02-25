@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"log"
 	"net"
 	"net/textproto"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/influxdata/telegraf/internal"
 	internaltls "github.com/influxdata/telegraf/internal/tls"
 	"github.com/influxdata/telegraf/plugins/inputs"
+	"github.com/influxdata/wlog"
 )
 
 type ResultType uint64
@@ -90,7 +93,9 @@ func (*Smtp) SampleConfig() string {
 
 func CheckResponse(r *textproto.Reader, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
 	var err error
-	code, _, err := r.ReadResponse(expectedCode)
+	code, msg, err := r.ReadResponse(expectedCode)
+	logMsg(fmt.Sprintf("Received response from %s operation: %d %s", string(operation), code, msg))
+
 	if err != nil {
 		if e, ok := err.(net.Error); ok && e.Timeout() {
 			setProtocolMetrics(Timeout, operation, code, fields, tags)
@@ -120,6 +125,7 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	// Start Timer
 	start := time.Now()
 	// Connecting
+	logMsg("Dialing tcp connection")
 	conn, err := net.DialTimeout("tcp", config.Address, config.Timeout.Duration)
 	// Prepare reader
 	reader := bufio.NewReader(conn)
@@ -194,6 +200,7 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 }
 
 func performCommand(conn net.Conn, tp *textproto.Reader, operation Operation, msg string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
+	logMsg(fmt.Sprintf("Executing %s command", string(operation)))
 	WriteCmd(conn, msg)
 	success = CheckResponse(tp, operation, expectedCode, fields, tags)
 	if !success && operation != Quit {
@@ -264,6 +271,12 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 
 	fields["result_code"] = uint64(result)
 	tags["result"] = tag
+}
+
+func logMsg(msg string) {
+	if wlog.LogLevel() == wlog.DEBUG {
+		log.Println(msg)
+	}
 }
 
 func init() {
