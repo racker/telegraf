@@ -66,37 +66,15 @@ Two response time metrics are returned.  One for the initial connection time and
 ### Example Output:
 
 ```
-> smtp,host=myhostname,port=25,result=success,server=localhost body_code=250i,connect_code=220i,connect_time=0.003375849,data_code=354i,ehlo_code=250i,from_code=250i,quit_code=221i,result_code=0i,to_code=250i,total_time=0.01299625 1582748272000000000
+> smtp,host=myhostname,port=25,result=success,server=localhost body_code=250i,connect_code=220i,connect_time=0.003485546,data_code=354i,ehlo_code=250i,from_code=250i,quit_code=221i,result_code=0i,starttls_code=220i,to_code=250i,total_time=0.054421634 1582754343000000000
 ```
 
 When telegraf is running in debug mode the plugin will output some more details before the metrics:
 
 ```
-2020-02-26T20:24:30Z I! Starting Telegraf 1.13.0-rc1
-2020-02-26T20:24:30Z I! Using config file: /etc/telegraf/telegraf.conf
-2020-02-26T20:24:30Z D! [agent] Initializing plugins
-2020-02-26T20:24:30Z I! Dialing tcp connection
-2020-02-26T20:24:30Z I! Received response from connect operation: 220 myhostname ESMTP Postfix (Ubuntu)
-2020-02-26T20:24:30Z I! Executing operation: EHLO example.com
-2020-02-26T20:24:30Z I! Received response from ehlo operation: 250 myhostname
-PIPELINING
-SIZE 10240000
-VRFY
-ETRN
-STARTTLS
-ENHANCEDSTATUSCODES
-8BITMIME
-DSN
-SMTPUTF8
-2020-02-26T20:24:30Z I! Executing operation: MAIL FROM:<me@example.com>
-2020-02-26T20:24:30Z I! Received response from from operation: 250 2.1.0 Ok
-2020-02-26T20:24:30Z I! Executing operation: RCPT TO:<you@example.com>
-2020-02-26T20:24:30Z I! Received response from to operation: 250 2.1.5 Ok
-2020-02-26T20:24:30Z I! Executing operation: DATA
-2020-02-26T20:24:30Z I! Received response from data operation: 354 End data with <CR><LF>.<CR><LF>
-2020-02-26T20:24:30Z I! Sending data payload: this is a test payload
-2020-02-26T20:24:30Z I! Received response from body operation: 250 2.0.0 Ok: queued as 8D68A4269B
-2020-02-26T20:24:30Z I! Executing operation: QUIT
-2020-02-26T20:24:30Z I! Received response from quit operation: 221 2.0.0 Bye
-> smtp,host=myhostname,port=25,result=success,server=localhost body_code=250i,connect_code=220i,connect_time=0.01893857,data_code=354i,ehlo_code=250i,from_code=250i,quit_code=221i,result_code=0i,to_code=250i,total_time=0.03669411 1582748671000000000
+2020-02-26T21:58:28Z I! smtp: Received expected response from connect operation
+2020-02-26T21:58:28Z I! smtp: Received expected response from ehlo operation
+2020-02-26T21:58:28Z I! smtp: Received expected response from starttls operation
+2020-02-26T21:58:28Z I! smtp: Received error response from to operations: 503 5.5.1 Error: need MAIL command
+> smtp,host=myhostname,port=25,result=string_mismatch,server=localhost connect_code=220i,connect_time=0.018595031,ehlo_code=250i,result_code=4i,starttls_code=220i,to_code=503i,total_time=0.06953827 1582754308000000000
 ```

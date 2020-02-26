@@ -1,11 +1,11 @@
 package smtp
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/smtp"
 	"net/textproto"
 	"time"
 
@@ -111,32 +111,35 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 	logMsg("Dialing tcp connection")
 	conn, err := net.DialTimeout("tcp", config.Address, config.Timeout.Duration)
 	if err != nil {
-		if e, ok := err.(net.Error); ok && e.Timeout() {
-			setResult(Timeout, fields, tags)
-		} else {
-			setResult(ConnectionFailed, fields, tags)
-		}
+		setErrorMetrics(Connect, err, fields, tags)
 		return tags, fields
 	}
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(config.ReadTimeout.Duration))
-	// Prepare reader
-	text := textproto.NewConn(conn)
-	defer text.Close()
-	// Verify client connected
-	success := checkResponse(text, Connect, 220, fields, tags)
+	// Prepare client
+	host, _, _ := net.SplitHostPort(config.Address)
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		setErrorMetrics(Connect, err, fields, tags)
+		return tags, fields
+	}
 	// Stop timer
 	responseTime := time.Since(start).Seconds()
 	fields["connect_time"] = responseTime
+	setResponseCodeMetric(Connect, 220, fields, tags)
 	// Handle connection error
-	if !success {
-		return tags, fields
-	}
 
 	// Perform required commands
 	// Commands are only executed if the previous one was successful
-	if success && config.Ehlo != "" {
-		success = performCommand(text, Ehlo, "EHLO "+config.Ehlo, 250, fields, tags)
+	var success bool = true
+
+	if config.Ehlo != "" {
+		if err := client.Hello(config.Ehlo); err != nil {
+			setErrorMetrics(Ehlo, err, fields, tags)
+			success = false
+		} else {
+			setResponseCodeMetric(Ehlo, 250, fields, tags)
+		}
 	}
 	if success && config.StartTls {
 		// read tls config
@@ -146,88 +149,103 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 			setResult(TlsConfigError, fields, tags)
 			success = false
 		} else {
-			success = performCommand(text, StartTls, "STARTTLS", 220, fields, tags)
-			if success {
-				// upgrade connection to tls
-				conn = tls.Client(conn, tlsConfig)
-				text = textproto.NewConn(conn)
+			if err := client.StartTLS(tlsConfig); err != nil {
+				setErrorMetrics(StartTls, err, fields, tags)
+				success = false
+			} else {
+				setResponseCodeMetric(StartTls, 220, fields, tags)
 			}
 		}
 	}
+
 	if success && config.From != "" {
-		msg := fmt.Sprintf("MAIL FROM:<%s>", config.From)
-		success = performCommand(text, MailFrom, msg, 250, fields, tags)
+		if err := client.Mail(config.From); err != nil {
+			setErrorMetrics(MailFrom, err, fields, tags)
+			success = false
+		} else {
+			setResponseCodeMetric(MailFrom, 250, fields, tags)
+		}
 	}
 
 	if success && config.To != "" {
-		msg := fmt.Sprintf("RCPT TO:<%s>", config.To)
-		success = performCommand(text, RcptTo, msg, 250, fields, tags)
+		if err := client.Rcpt(config.To); err != nil {
+			setErrorMetrics(RcptTo, err, fields, tags)
+			success = false
+		} else {
+			setResponseCodeMetric(RcptTo, 250, fields, tags)
+		}
 	}
 	if success && config.Body != "" {
-		// First check the response from "DATA"
-		success = performCommand(text, Data, "DATA", 354, fields, tags)
+		w, err := client.Data()
+		if err != nil {
+			setErrorMetrics(Data, err, fields, tags)
+			success = false
+		}
 		if success {
-			// then the response from the body
-			logMsg("Sending data payload: " + config.Body)
-			w := text.DotWriter()
-			_, err = w.Write([]byte(config.Body))
-			w.Close()
-			success = checkResponse(text, Body, 250, fields, tags)
-			//success = performCommand(text, Body, config.Body+"\r\n.\r\n", 250, fields, tags)
+			setResponseCodeMetric(Data, 354, fields, tags)
+
+			_, err1 := w.Write([]byte(config.Body))
+			err2 := w.Close()
+			if err1 != nil {
+				setErrorMetrics(Body, err, fields, tags)
+				success = false
+			} else if err2 != nil {
+				setErrorMetrics(Body, err2, fields, tags)
+				success = false
+			} else {
+				setResponseCodeMetric(Body, 250, fields, tags)
+			}
 		}
 	}
 
 	// always execute the quit command
 	if success {
-		performCommand(text, Quit, "QUIT", 221, fields, tags)
+		if err := client.Quit(); err != nil {
+			setErrorMetrics(Quit, err, fields, tags)
+			success = false
+		} else {
+			setResponseCodeMetric(Quit, 221, fields, tags)
+		}
 	} else {
 		// attempt to cleanly close the connection but don't store extra metrics
-		text.Cmd("QUIT")
+		client.Quit()
 	}
 
+	if success {
+		// set the final success result if everything went well
+		setResult(Success, fields, tags)
+	}
 	responseTime = time.Since(start).Seconds()
 	fields["total_time"] = responseTime
 	return tags, fields
 }
 
-func performCommand(text *textproto.Conn, operation Operation, msg string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
-	logMsg(fmt.Sprintf("Executing operation: %s", msg))
-	id, err := text.Cmd(msg)
-	if err != nil {
-		setResult(CommandFailed, fields, tags)
-		return false
-	}
-	// this is needed so the response to starttls can be read
-	text.StartResponse(id)
-	defer text.EndResponse(id)
-
-	return checkResponse(text, operation, expectedCode, fields, tags)
-}
-
-func checkResponse(text *textproto.Conn, operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
-	var err error
-	code, msg, err := text.ReadResponse(expectedCode)
-	logMsg(fmt.Sprintf("Received response from %s operation: %d %s", string(operation), code, msg))
-
+func setErrorMetrics(operation Operation, err error, fields map[string]interface{}, tags map[string]string) {
+	var result ResultType
 	if err != nil {
 		if e, ok := err.(net.Error); ok && e.Timeout() {
-			setMetrics(Timeout, operation, code, fields, tags)
+			logMsg(fmt.Sprintf("Timed out when performing %s operation", string(operation)))
+			result = Timeout
+		} else if operation == Connect {
+			logMsg(fmt.Sprintf("Failed to connect to server"))
+			result = ConnectionFailed
 		} else if e, ok := err.(*textproto.Error); ok && e.Code != 0 {
-			setMetrics(StringMismatch, operation, code, fields, tags)
+			logMsg(fmt.Sprintf("Received error response from %s operations: %d %s",
+				string(operation), e.Code, e.Msg))
+
+			fields[string(operation)+"_code"] = e.Code
+			result = StringMismatch
 		} else {
-			setMetrics(ReadFailed, operation, code, fields, tags)
+			logMsg(fmt.Sprintf("Read failed when performing %s operation", string(operation)))
+			result = ReadFailed
 		}
-		return false
 	}
-	setMetrics(Success, operation, code, fields, tags)
-	return true
+	setResult(result, fields, tags)
 }
 
-func setMetrics(result ResultType, operation Operation, foundCode int, fields map[string]interface{}, tags map[string]string) {
-	setResult(result, fields, tags)
-	if foundCode != 0 {
-		fields[string(operation)+"_code"] = foundCode
-	}
+func setResponseCodeMetric(operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) {
+	logMsg(fmt.Sprintf("Received expected response from %s operation", string(operation)))
+	fields[string(operation)+"_code"] = expectedCode
 }
 
 func setResult(result ResultType, fields map[string]interface{}, tags map[string]string) {
@@ -255,7 +273,7 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 
 func logMsg(msg string) {
 	if wlog.LogLevel() == wlog.DEBUG {
-		log.Println(msg)
+		log.Println("smtp: "+msg)
 	}
 }
 
