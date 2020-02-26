@@ -26,7 +26,6 @@ const (
 	ReadFailed
 	StringMismatch
 	TlsConfigError
-	CommandFailed
 )
 
 const (
@@ -263,8 +262,6 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 		tag = "string_mismatch"
 	case TlsConfigError:
 		tag = "tls_config_error"
-	case CommandFailed:
-		tag = "command_failed"
 	}
 
 	fields["result_code"] = uint64(result)
