@@ -66,7 +66,7 @@ var sampleConfig = `
   address = "localhost:25"
 
   ## Set initial connection timeout
-  # timeout = "10s"
+  # timeout = "1s"
 
   ## Set read timeout
   # read_timeout = "10s"
@@ -142,8 +142,6 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 		// read tls config
 		tlsConfig, err := config.ClientConfig.TLSConfig()
 		if err != nil || tlsConfig == nil {
-			// cleanly close the connection
-			text.Cmd("QUIT")
 			// update failure status
 			setResult(TlsConfigError, fields, tags)
 			success = false
@@ -157,24 +155,34 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 		}
 	}
 	if success && config.From != "" {
-		success = performCommand(text, MailFrom, "MAIL FROM:"+config.From, 250, fields, tags)
+		msg := fmt.Sprintf("MAIL FROM:<%s>", config.From)
+		success = performCommand(text, MailFrom, msg, 250, fields, tags)
 	}
 
 	if success && config.To != "" {
-		success = performCommand(text, RcptTo, "RCPT TO:"+config.To, 250, fields, tags)
+		msg := fmt.Sprintf("RCPT TO:<%s>", config.To)
+		success = performCommand(text, RcptTo, msg, 250, fields, tags)
 	}
 	if success && config.Body != "" {
 		// First check the response from "DATA"
 		success = performCommand(text, Data, "DATA", 354, fields, tags)
 		if success {
 			// then the response from the body
-			success = performCommand(text, Body, config.Body+"\r\n.\r\n", 250, fields, tags)
+			logMsg("Sending data payload: " + config.Body)
+			w := text.DotWriter()
+			_, err = w.Write([]byte(config.Body))
+			w.Close()
+			success = checkResponse(text, Body, 250, fields, tags)
+			//success = performCommand(text, Body, config.Body+"\r\n.\r\n", 250, fields, tags)
 		}
 	}
 
 	// always execute the quit command
 	if success {
 		performCommand(text, Quit, "QUIT", 221, fields, tags)
+	} else {
+		// attempt to cleanly close the connection but don't store extra metrics
+		text.Cmd("QUIT")
 	}
 
 	responseTime = time.Since(start).Seconds()
@@ -183,7 +191,7 @@ func (config *Smtp) SMTPGather() (tags map[string]string, fields map[string]inte
 }
 
 func performCommand(text *textproto.Conn, operation Operation, msg string, expectedCode int, fields map[string]interface{}, tags map[string]string) (success bool) {
-	logMsg(fmt.Sprintf("Executing %s command", string(operation)))
+	logMsg(fmt.Sprintf("Executing operation: %s", msg))
 	id, err := text.Cmd(msg)
 	if err != nil {
 		setResult(CommandFailed, fields, tags)
@@ -237,6 +245,8 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 		tag = "string_mismatch"
 	case TlsConfigError:
 		tag = "tls_config_error"
+	case CommandFailed:
+		tag = "command_failed"
 	}
 
 	fields["result_code"] = uint64(result)
