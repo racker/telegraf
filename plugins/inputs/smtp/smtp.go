@@ -223,13 +223,13 @@ func setErrorMetrics(operation Operation, err error, fields map[string]interface
 	var result ResultType
 	if err != nil {
 		if e, ok := err.(net.Error); ok && e.Timeout() {
-			logMsg(fmt.Sprintf("Timed out when performing %s operation", string(operation)))
+			logMsg(fmt.Sprintf("Timed out when performing '%s' operation", string(operation)))
 			result = Timeout
 		} else if operation == Connect {
 			logMsg(fmt.Sprintf("Failed to connect to server"))
 			result = ConnectionFailed
 		} else if e, ok := err.(*textproto.Error); ok && e.Code != 0 {
-			logMsg(fmt.Sprintf("Received error response from %s operations: %d %s",
+			logMsg(fmt.Sprintf("Received error response from '%s' operation: %d %s",
 				string(operation), e.Code, e.Msg))
 
 			fields[string(operation)+"_code"] = e.Code
@@ -243,7 +243,7 @@ func setErrorMetrics(operation Operation, err error, fields map[string]interface
 }
 
 func setResponseCodeMetric(operation Operation, expectedCode int, fields map[string]interface{}, tags map[string]string) {
-	logMsg(fmt.Sprintf("Received expected response from %s operation", string(operation)))
+	logMsg(fmt.Sprintf("Received expected response from '%s' operation", string(operation)))
 	fields[string(operation)+"_code"] = expectedCode
 }
 

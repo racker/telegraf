@@ -72,9 +72,9 @@ Two response time metrics are returned.  One for the initial connection time and
 When telegraf is running in debug mode the plugin will output some more details before the metrics:
 
 ```
-2020-02-26T21:58:28Z I! smtp: Received expected response from connect operation
-2020-02-26T21:58:28Z I! smtp: Received expected response from ehlo operation
-2020-02-26T21:58:28Z I! smtp: Received expected response from starttls operation
-2020-02-26T21:58:28Z I! smtp: Received error response from to operations: 503 5.5.1 Error: need MAIL command
+2020-02-26T21:58:28Z I! smtp: Received expected response from 'connect' operation
+2020-02-26T21:58:28Z I! smtp: Received expected response from 'ehlo' operation
+2020-02-26T21:58:28Z I! smtp: Received expected response from 'starttls' operation
+2020-02-26T21:58:28Z I! smtp: Received error response from 'to' operation: 503 5.5.1 Error: need MAIL command
 > smtp,host=myhostname,port=25,result=string_mismatch,server=localhost connect_code=220i,connect_time=0.018595031,ehlo_code=250i,result_code=4i,starttls_code=220i,to_code=503i,total_time=0.06953827 1582754308000000000
 ```
