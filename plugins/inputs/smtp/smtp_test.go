@@ -130,8 +130,6 @@ func testSmtpHelper(t *testing.T, testConfig testConfig, fields map[string]inter
 	}
 	require.NoError(t, err1)
 	acc.AssertContainsTaggedFields(t, "smtp", fields, tags)
-	// Waiting TCPserver
-	wg.Wait()
 }
 
 func TestSmtpFullSession_Success(t *testing.T) {

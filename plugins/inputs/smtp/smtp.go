@@ -270,7 +270,7 @@ func setResult(result ResultType, fields map[string]interface{}, tags map[string
 
 func logMsg(msg string) {
 	if wlog.LogLevel() == wlog.DEBUG {
-		log.Println("smtp: "+msg)
+		log.Println("smtp: " + msg)
 	}
 }
 
